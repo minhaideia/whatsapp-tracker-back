@@ -3,6 +3,8 @@ const express = require('express');
 const fs = require('fs-extra');
 
 const app = express();
+const cors = require('cors');
+app.use(cors());
 app.use(express.json());
 
 let sock;
