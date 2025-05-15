@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
+    "railway": "node index.js || (echo 'Processo falhou. Reiniciando...' && node index.js)",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
