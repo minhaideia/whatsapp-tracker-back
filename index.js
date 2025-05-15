@@ -1,6 +1,6 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
-const fs = require('fs');
+const fs = require('fs-extra');
 
 const app = express();
 app.use(express.json());
@@ -89,6 +89,18 @@ app.get('/qrcode', (req, res) => {
         res.json({ qr: currentQR });
     } else {
         res.status(404).json({ message: 'QR code não disponível. Já conectado ou não inicializado.' });
+    }
+});
+
+app.post('/desconectar', async (req, res) => {
+    try {
+        await fs.remove('auth_info');
+        currentQR = null;
+        res.send('Sessão desconectada. Reinicie o serviço para gerar novo QR code.');
+        process.exit(1); // Força reinício no Railway após limpar a sessão
+    } catch (error) {
+        console.error('Erro ao desconectar:', error);
+        res.status(500).send('Erro ao tentar desconectar.');
     }
 });
 
