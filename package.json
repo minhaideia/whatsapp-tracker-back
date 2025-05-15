@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-tracker-back",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "baileys": "^6.7.16",
+    "express": "^5.1.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
