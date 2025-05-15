@@ -22,6 +22,9 @@ const dataFile = './logs.json';
 
 let currentQR = null;
 
+// Variável para rastrear estado da conexão
+let connectionStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected'
+
 const logEvent = (event) => {
     const logs = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile)) : [];
     logs.push({ timestamp: new Date(), event });
@@ -32,6 +35,9 @@ async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
+    connectionStatus = 'connecting';
+    console.log('Iniciando conexão com WhatsApp...');
+
     sock = makeWASocket({
         auth: state,
         version,
@@ -41,15 +47,26 @@ async function startBot() {
     sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
         if (qr) {
             currentQR = qr;
+            connectionStatus = 'connecting';
             console.log('QR atualizado');
         }
 
+        if (connection === 'open') {
+            connectionStatus = 'connected';
+            currentQR = null;
+            console.log('Conectado ao WhatsApp!');
+        }
+
         if (connection === 'close') {
+            connectionStatus = 'disconnected';
             if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
                 startBot();
             }
         }
     });
+
+    // Salvar credenciais quando atualizar
+    sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('presence.update', (update) => {
         if (!monitoringNumber) return;
@@ -104,14 +121,34 @@ app.get('/qrcode', (req, res) => {
 
 app.post('/desconectar', async (req, res) => {
     try {
+        // Remover os arquivos de autenticação
         await fs.remove('auth_info');
+        
+        // Limpar variáveis de estado
         currentQR = null;
-        res.send('Sessão desconectada. Reinicie o serviço para gerar novo QR code.');
-        process.exit(1); // Força reinício no Railway após limpar a sessão
+        monitoringNumber = null;
+        onlineSince = null;
+        
+        // Responder ao cliente antes de reiniciar
+        res.status(200).json({ success: true, message: 'Sessão desconectada. O serviço será reiniciado.' });
+        
+        // Aguardar um pouco para garantir que a resposta seja enviada
+        setTimeout(() => {
+            console.log('Reiniciando serviço após desconexão');
+            process.exit(0); // Código 0 para indicar saída normal (sem erro)
+        }, 1000);
     } catch (error) {
         console.error('Erro ao desconectar:', error);
-        res.status(500).send('Erro ao tentar desconectar.');
+        res.status(500).json({ success: false, message: 'Erro ao tentar desconectar.' });
     }
+});
+
+app.get('/status', (req, res) => {
+    res.json({
+        status: connectionStatus,
+        monitoringNumber: monitoringNumber || null,
+        hasQrCode: !!currentQR
+    });
 });
 
 const PORT = process.env.PORT || 3000;
