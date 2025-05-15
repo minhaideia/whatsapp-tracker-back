@@ -10,6 +10,8 @@ let monitoringNumber = null;
 let onlineSince = null;
 const dataFile = './logs.json';
 
+let currentQR = null;
+
 const logEvent = (event) => {
     const logs = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile)) : [];
     logs.push({ timestamp: new Date(), event });
@@ -26,7 +28,12 @@ async function startBot() {
         printQRInTerminal: true
     });
 
-    sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+    sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+        if (qr) {
+            currentQR = qr;
+            console.log('QR atualizado');
+        }
+
         if (connection === 'close') {
             if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
                 startBot();
@@ -74,6 +81,14 @@ app.get('/logs', (req, res) => {
         res.json(JSON.parse(fs.readFileSync(dataFile)));
     } else {
         res.json([]);
+    }
+});
+
+app.get('/qrcode', (req, res) => {
+    if (currentQR) {
+        res.json({ qr: currentQR });
+    } else {
+        res.status(404).json({ message: 'QR code não disponível. Já conectado ou não inicializado.' });
     }
 });
 
