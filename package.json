@@ -12,6 +12,7 @@
   "dependencies": {
     "@whiskeysockets/baileys": "^6.17.16",
     "baileys": "^6.7.16",
+    "cors": "^2.8.5",
     "express": "^5.1.0",
     "fs-extra": "^11.3.0",
     "qrcode-terminal": "^0.12.0"
