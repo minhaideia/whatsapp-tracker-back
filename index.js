@@ -33,6 +33,24 @@ const logEvent = (event) => {
 
 async function startBot() {
     try {
+        // Limpar QR anterior ao iniciar
+        currentQR = null;
+        
+        // Verificar e remover credenciais corrompidas
+        try {
+            const authInfoDir = './auth_info';
+            if (fs.existsSync(authInfoDir)) {
+                const files = await fs.readdir(authInfoDir);
+                // Se existe diretório mas está vazio ou tem arquivos corrompidos
+                if (files.length === 0 || files.some(f => f.includes('.corrupt'))) {
+                    console.log('Encontradas credenciais potencialmente corrompidas. Removendo...');
+                    await fs.remove(authInfoDir);
+                }
+            }
+        } catch (authError) {
+            console.error('Erro ao verificar diretório de autenticação:', authError);
+        }
+        
         const { state, saveCreds } = await useMultiFileAuthState('auth_info');
         const { version } = await fetchLatestBaileysVersion();
 
@@ -45,10 +63,12 @@ async function startBot() {
             printQRInTerminal: true,
             browser: ['WhatsApp Tracker', 'Chrome', '10.0'],
             connectTimeoutMs: 60000,
-            qrTimeout: 40000,
+            qrTimeout: 60000, // Aumentado para 1 minuto
             defaultQueryTimeoutMs: 60000,
             syncFullHistory: false,
             keepAliveIntervalMs: 10000,
+            markOnlineOnConnect: false, // Não marcar como online ao conectar
+            retryRequestDelayMs: 500,
             patchMessageBeforeSending: msg => {
                 const requiresPatch = !!(
                     msg.buttonsMessage || 
@@ -81,29 +101,42 @@ async function startBot() {
             if (qr) {
                 currentQR = qr;
                 connectionStatus = 'connecting';
-                console.log('QR atualizado');
+                console.log('QR atualizado:', qr.slice(0, 20) + '...');
+                
+                // Registrar geração de QR nos logs
+                logEvent('QR code gerado');
             }
 
             if (connection === 'open') {
                 connectionStatus = 'connected';
                 currentQR = null;
                 console.log('Conectado ao WhatsApp!');
+                logEvent('Conectado ao WhatsApp');
             }
 
             if (connection === 'close') {
                 connectionStatus = 'disconnected';
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                const reasonCode = lastDisconnect?.error?.output?.payload?.error;
                 
-                console.log('Conexão fechada. Código:', statusCode);
+                console.log(`Conexão fechada. Código: ${statusCode}, Razão: ${reasonCode}`);
+                logEvent(`Desconectado: ${reasonCode || 'Razão desconhecida'}`);
+                
+                // Lógica de reconexão melhorada
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
                 if (shouldReconnect) {
                     console.log('Tentando reconectar...');
+                    // Reconexão com tempo progressivo
                     setTimeout(() => {
                         startBot();
-                    }, 5000); // Aguarda 5 segundos antes de tentar reconectar
+                    }, 5000);
                 } else {
                     console.log('Desconectado permanentemente. Não tentará reconectar.');
+                    // Limpar arquivos de autenticação para permitir nova conexão
+                    fs.remove('auth_info').catch(err => {
+                        console.error('Erro ao limpar credenciais:', err);
+                    });
                 }
             }
         });
@@ -268,9 +301,49 @@ app.get('/logs', (req, res) => {
 
 app.get('/qrcode', (req, res) => {
     if (currentQR) {
+        // QR code disponível, retorna
         res.json({ qr: currentQR });
+    } else if (connectionStatus === 'connected') {
+        // Se já está conectado, informa
+        res.status(200).json({ 
+            connected: true,
+            message: 'Já conectado ao WhatsApp. Não é necessário escanear QR code.' 
+        });
     } else {
-        res.status(404).json({ message: 'QR code não disponível. Já conectado ou não inicializado.' });
+        // Se não há QR code e não está conectado, tenta forçar a geração de um novo
+        console.log('QR indisponível. Tentando reiniciar conexão...');
+        
+        // Verifica há quanto tempo está tentando conectar
+        const shouldRestartConnection = connectionStatus === 'connecting';
+        
+        if (shouldRestartConnection) {
+            // Força reconexão se estiver preso em "connecting"
+            try {
+                if (sock) {
+                    try { sock.logout(); } catch (e) { console.error(e); }
+                }
+                
+                // Agenda reinício do bot
+                setTimeout(() => {
+                    console.log('Reiniciando para gerar novo QR...');
+                    startBot();
+                }, 2000);
+                
+                res.status(202).json({ 
+                    message: 'Tentando gerar um novo QR code. Tente novamente em 15 segundos.',
+                    retry: true
+                });
+            } catch (error) {
+                console.error('Erro ao tentar forçar novo QR:', error);
+                res.status(500).json({ message: 'Erro ao tentar gerar QR code.', error: error.message });
+            }
+        } else {
+            // Não está conectado nem em processo de conexão
+            res.status(404).json({ 
+                message: 'QR code não disponível. Já conectado ou não inicializado.',
+                status: connectionStatus
+            });
+        }
     }
 });
 
@@ -383,6 +456,66 @@ app.post('/resetqr', async (req, res) => {
     } catch (error) {
         console.error('Erro ao resetar QR:', error);
         res.status(500).json({ success: false, message: 'Erro ao resetar QR code.' });
+    }
+});
+
+// Endpoint para forçar reset completo do sistema
+app.post('/reset', async (req, res) => {
+    try {
+        console.log('Realizando reset completo do sistema...');
+        
+        // Tentar desconectar se estiver conectado
+        if (sock) {
+            try {
+                await sock.logout();
+            } catch (error) {
+                console.error('Erro ao fazer logout:', error);
+                // Continua mesmo com erro
+            }
+        }
+        
+        // Limpar variáveis de estado
+        currentQR = null;
+        monitoringNumber = null;
+        onlineSince = null;
+        connectionStatus = 'disconnected';
+        
+        // Limpar logs
+        try {
+            if (fs.existsSync(dataFile)) {
+                await fs.writeFile(dataFile, JSON.stringify([]));
+                console.log('Logs limpos');
+            }
+        } catch (logError) {
+            console.error('Erro ao limpar logs:', logError);
+        }
+        
+        // Remover arquivos de autenticação
+        try {
+            await fs.remove('auth_info');
+            console.log('Arquivos de autenticação removidos');
+        } catch (authError) {
+            console.error('Erro ao remover arquivos de autenticação:', authError);
+        }
+        
+        res.status(200).json({
+            success: true,
+            message: 'Sistema resetado. Tente conectar novamente em alguns segundos.'
+        });
+        
+        // Reiniciar o bot após um pequeno delay
+        setTimeout(() => {
+            console.log('Reiniciando sistema após reset completo...');
+            startBot();
+        }, 3000);
+        
+    } catch (error) {
+        console.error('Erro ao resetar sistema:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao tentar resetar o sistema',
+            error: error.message
+        });
     }
 });
 
