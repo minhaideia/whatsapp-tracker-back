@@ -300,6 +300,7 @@ app.get('/logs', (req, res) => {
 });
 
 app.get('/qrcode', (req, res) => {
+    console.log('QR atual:', currentQR);
     if (currentQR) {
         // QR code disponível, retorna
         res.json({ qr: currentQR });
